@@ -1,0 +1,18 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+pandas = "*"
+python-dotenv = "*"
+requests = "*"
+xtermcolor = "*"
+matplotlib = "*"
+seaborn = "*"
+scipy = "*"
+
+[requires]
+python_version = "3.8"
+
+[dev-packages]
