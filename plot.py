@@ -6,7 +6,7 @@ from log import log
 import seaborn as sns
 
 #START_TIME = '2018-01-01'
-COMPARE_PARAMS = ['followers']
+COMPARE_PARAMS = ['points']
 
 coins_df = pd.read_csv('selected_coins.csv')
 for index, row in coins_df.iterrows():

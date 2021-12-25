@@ -3,14 +3,19 @@ import os
 import requests
 import pandas as pd
 from log import log
-from utils import (momentum_quality, momentum_score , volatility)
+from utils import (momentum_quality, momentum_score , volatility, str2bool)
+
+from dotenv import load_dotenv, find_dotenv
+load_dotenv(find_dotenv())
+
+from SES import ( AmazonSES )
 
 LOOKBACK_PERIOD_MONTHS = 12
 QUALITY_SUCCESS_RATIO = 2/3
 
 DAYS_IN_MONTH = 30
 MIN_INF_DISCR = 0.0
-MIN_MOMENTUM_SCORE = 0.0
+MIN_MOMENTUM_SCORE = 500.0
 coins_df = pd.read_csv('selected_coins.csv')
 
 lookback_end = datetime.now() - timedelta( days = DAYS_IN_MONTH)
@@ -18,6 +23,7 @@ lookback_end = datetime.now() - timedelta( days = DAYS_IN_MONTH)
 
 past_date = datetime.now() - timedelta( days = LOOKBACK_PERIOD_MONTHS * DAYS_IN_MONTH)
 has_trend = []
+runners_up = []
 for index, row in coins_df.iterrows():
     symbol = row.symbol.upper()
     log(symbol)
@@ -42,32 +48,63 @@ for index, row in coins_df.iterrows():
     #    continue
 
     # calculate inf_discr score
-    inf_discr, is_quality = momentum_quality(df['close'][past_date.strftime('%Y-%m-%d'): lookback_end.strftime('%Y-%m-%d')], min_inf_discr = MIN_INF_DISCR, lookback_months = LOOKBACK_PERIOD_MONTHS, quality_success_ratio = QUALITY_SUCCESS_RATIO)
+    inf_discr, positive_sum, is_quality = momentum_quality(df['close'][past_date.strftime('%Y-%m-%d'): lookback_end.strftime('%Y-%m-%d')], min_inf_discr = MIN_INF_DISCR, lookback_months = LOOKBACK_PERIOD_MONTHS, quality_success_ratio = QUALITY_SUCCESS_RATIO)
+
     if not is_quality:
         log(' > Quality failed', 'error')
-        continue
+
 
     # calculate momentum score
     score = momentum_score(df['close'][past_date.strftime('%Y-%m-%d'): lookback_end.strftime('%Y-%m-%d')]).mean()
     if score <= float(MIN_MOMENTUM_SCORE):
         log(' > Score {0} less than minimum'.format(score))
-        continue
+    else:
+        print(' > Momentum Score: {}'.format(round(score, 3)))
 
+    print(' > Volatility: {}'.format(round(volatility(df['close'][past_date.strftime('%Y-%m-%d'): lookback_end.strftime('%Y-%m-%d')]), 3)))
 
-    log(' > Pass', 'success')
-    has_trend.append({
-        'symbol': symbol,
-        'score': score,
-        'inf_discr': inf_discr,
-        'volatility': volatility(df['close'][past_date.strftime('%Y-%m-%d'): lookback_end.strftime('%Y-%m-%d')])
-    })
+    if is_quality:
+        log(' > Pass', 'success')
+        has_trend.append({
+            'symbol': symbol,
+            'score': score,
+            'positive_sum': positive_sum,
+            'volatility': volatility(df['close'][past_date.strftime('%Y-%m-%d'): lookback_end.strftime('%Y-%m-%d')])
+        })
+    elif score > MIN_MOMENTUM_SCORE:
+        runners_up.append({
+            'symbol': symbol,
+            'score': score,
+            'positive_sum': positive_sum,
+            'volatility': volatility(df['close'][past_date.strftime('%Y-%m-%d'): lookback_end.strftime('%Y-%m-%d')])
+        })
 
+message_body_html = '<b>Coins Pass (> {} Months positive return)</b><br>'.format(LOOKBACK_PERIOD_MONTHS)
 print('\n')
-log('Coins Pass ({} Month trend)'.format(LOOKBACK_PERIOD_MONTHS), 'success')
+log('Coins Pass (> {} Months positive return)'.format(LOOKBACK_PERIOD_MONTHS), 'success')
 for item in has_trend:
     # calculate volatility
-    log('Symbol: {}, Inf Discr: {}, Momentum Score: {}, Volatility: {}'.format(item['symbol'], round(item['inf_discr'], 3), round(item['score'], 3), round(item['volatility'], 3)), 'info')
+    log('Symbol: {}, Positive Months: {}, Momentum Score: {}, Volatility: {}'.format(item['symbol'], round(item['positive_sum'], 3), round(item['score'], 3), round(item['volatility'], 3)), 'info')
+    message_body_html +=  'Symbol: {}, Positive Months: {}, Momentum Score: {}, Volatility: {}<br>'.format(item['symbol'], round(item['positive_sum'], 3), round(item['score'], 3), round(item['volatility'], 3))
 
 print('\n')
-log('Note(s):', 'warning')
-log('Lower the Inf Discr the better. It has a minimum of -1', 'info')
+log('Coins Meet mimimum Momentum Score (> {})'.format(MIN_MOMENTUM_SCORE), 'success')
+message_body_html += '<br><b>Coins Meet mimimum Momentum Score (> {})</b><br>'.format(MIN_MOMENTUM_SCORE)
+for item in runners_up:
+    # calculate volatility
+    log('Symbol: {}, Positive Months: {}, Momentum Score: {}, Volatility: {}'.format(item['symbol'], round(item['positive_sum'], 3), round(item['score'], 3), round(item['volatility'], 3)), 'info')
+    message_body_html +=  'Symbol: {}, Positive Months: {}, Momentum Score: {}, Volatility: {}<br>'.format(item['symbol'], round(item['positive_sum'], 3), round(item['score'], 3), round(item['volatility'], 3))
+
+if str2bool(os.getenv('EMAIL_POSITIONS', False)):
+    TO_ADDRESSES = os.getenv('TO_ADDRESSES', '').split(',')
+    FROM_ADDRESS = os.getenv('FROM_ADDRESS', '')
+    ses = AmazonSES(region = os.environ.get('AWS_SES_REGION_NAME'),
+                    access_key = os.environ.get('AWS_SES_ACCESS_KEY_ID'),
+                    secret_key= os.environ.get('AWS_SES_SECRET_ACCESS_KEY'),
+                    from_address = os.environ.get('FROM_ADDRESS')
+                    )
+
+    subject = "Your Monthly Crypto Momentum Report"
+
+    for to_address in TO_ADDRESSES:
+        ses.send_html_email( to_address = to_address, subject = subject, content = message_body_html)
